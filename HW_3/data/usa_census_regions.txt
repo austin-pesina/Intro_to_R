@@ -1,0 +1,52 @@
+X       census_region                state
+1         New England          Connecticut
+2         New England                Maine
+3         New England        Massachusetts
+4         New England        New Hampshire
+5         New England         Rhode Island
+6         New England              Vermont
+7        Mid-Atlantic           New Jersey
+8        Mid-Atlantic             New York
+9        Mid-Atlantic         Pennsylvania
+10 East North Central             Illinois
+11 East North Central              Indiana
+12 East North Central             Michigan
+13 East North Central                 Ohio
+14 East North Central            Wisconsin
+15 West North Central                 Iowa
+16 West North Central               Kansas
+17 West North Central            Minnesota
+18 West North Central             Missouri
+19 West North Central             Nebraska
+20 West North Central         North Dakota
+21 West North Central         South Dakota
+22     South Atlantic             Delaware
+23     South Atlantic              Florida
+24     South Atlantic              Georgia
+25     South Atlantic             Maryland
+26     South Atlantic       North Carolina
+27     South Atlantic       South Carolina
+28     South Atlantic             Virginia
+29     South Atlantic District of Columbia
+30     South Atlantic        West Virginia
+31 East South Central              Alabama
+32 East South Central             Kentucky
+33 East South Central          Mississippi
+34 East South Central            Tennessee
+35 West South Central             Arkansas
+36 West South Central            Louisiana
+37 West South Central             Oklahoma
+38 West South Central                Texas
+39           Mountain              Arizona
+40           Mountain             Colorado
+41           Mountain                Idaho
+42           Mountain              Montana
+43           Mountain               Nevada
+44           Mountain           New Mexico
+45           Mountain                 Utah
+46           Mountain              Wyoming
+47            Pacific               Alaska
+48            Pacific           California
+49            Pacific               Hawaii
+50            Pacific               Oregon
+51            Pacific           Washington

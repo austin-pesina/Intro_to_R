@@ -1,0 +1,69 @@
+---
+title: "Untitled"
+author: "Austin Pesina"
+date: "4/30/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(repurrrsive)
+```
+
+## Using Purr in your workflow
+
+```{r}
+data(sw_films)
+names(sw_films)
+str(sw_films)
+```
+
+
+```{r}
+sw_films <- sw_films %>%
+  set_names(map_chr(sw_films, "title"))
+
+names(sw_films)
+```
+
+
+```{r}
+map_chr(sw_films, ~.x[["episode_id"]]) %>%
+  set_names(map_chr(sw_films, "title")) %>%
+  sort()
+```
+
+
+
+## Even More Complex Problems
+
+```{r}
+data(gh_repos)
+forks <- gh_repos %>%
+  map( ~map(.x, "forks"))
+forks
+
+
+## Summary Stats
+
+bird_measurements %>%
+  map_df(~ tibble(
+    weight = .x[["weight"]],
+    wing_length = .x[["wing length"]],
+    taxa = "bird")) %>%
+    select_if(is.numeric) %>%
+  summary(.x)
+
+```
+
+
+
+## Graphs in Purr
+
+```{r}
+birddf <- bird_measurements %>%
+  map_df(~ data_frame(
+     wing_length = .x[["wing length"]],
+      weight = .x[["weight"]])) %>%
+   ggplot(aes(x = weight, y = wing_length))+
+     geom_point()
+```
