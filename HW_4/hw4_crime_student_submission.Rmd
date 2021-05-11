@@ -1,0 +1,765 @@
+---
+title: 'HW #4: Crime Analysis Using R'
+output:
+  html_document:
+    toc: yes
+    df_print: paged
+  html_notebook:
+    toc: yes
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=FALSE,warning=FALSE,echo=TRUE,error = TRUE)
+```
+
+### Problem definition
+Predictive policing is a multi-dimensional optimization problem where law enforcement agencies try to efficiently utilize a scarce resource to minimize instances of crime overtime and across geographies. But how do we optimize? This is precisely what we answer in this assignment by using real and publicly available criminal data of Chicago. Using statistics and computer aided technologies we try to devise a solution for this optimization problem. In an attempt to address a real-world problem, our primary focus here is on the fundamentals of data rather than on acrobatics with techniques.
+
+Crime analysis includes looking at the data from 2 different dimension spatial and temporal. Spatial dimension involves observing the characteristics of a particular region along with its neighbor. Temporal dimension involves observing the characteristics of a particular region overtime. The question then is how far away, from the epicenter, do we look for a similar pattern and how far back in time, from the date of event, do we go to capture the trend. Ideally we would like to have as much data as possible. Often, in reality we don’t, and that makes data science a creative process. A process bound by mathematical logic in centered around statistical validity.
+
+Crime data are not easy to deal with period with both spatial and temporal attributes, processing them can be a challenging task. The challenge is not limited to handling spatial and temporal data but also deriving information from them at these levels. Any predictive model for crime will have to have these 2 dimensions attached to it. And to make an effort toward effective predictive policing strategies, this inherent structure of the data needs to be leveraged.
+
+### Data extraction
+For this exercise, we use crime data for the city of Chicago which are available from 2001 onwards on the city’s open data portal. Crime data for city of Chicago available from their open data portal at: <https://data.cityofchicago.org/>. To make analysis manageable, we utilized the past one year of data from the current date.
+
+R has the capability of reading files and data tables directly from the Web. We can do this by specifying the connection string instead of the file name in the read_csv() function. We can access the Chicago crime data from the following url: <https://data.cityofchicago.org/api/views/x2n5-8w5q/rows.csv?accessType=DOWNLOAD>
+
+```{r}
+library(tidyverse)
+# Download one year of crime data from the open data portal of city of Chicago
+# NOTE: This may take a while depening on the strength of your internet connection
+# First I ran read_csv() to find the default col_types() then I updated them to this:
+type=cols( `CASE#` = col_character(),
+           `DATE  OF OCCURRENCE` = col_datetime(format="%m/%d/%Y %I:%M:%S %p"),
+           BLOCK = col_factor(),
+           IUCR = col_factor(),
+           `PRIMARY DESCRIPTION` = col_factor(),
+           `SECONDARY DESCRIPTION` = col_factor(),
+           `LOCATION DESCRIPTION` = col_factor(),
+           ARREST = col_factor(),
+           DOMESTIC = col_factor(),
+           BEAT = col_factor(),
+           WARD = col_factor(),
+           `FBI CD` = col_factor(),
+           `X COORDINATE` = col_double(),
+           `Y COORDINATE` = col_double(),
+           LATITUDE = col_double(),
+           LONGITUDE = col_double(),
+           LOCATION = col_character()
+)
+
+# Specify download url
+url.data <- "https://data.cityofchicago.org/api/views/x2n5-8w5q/rows.csv?accessType=DOWNLOAD"
+
+# Read in data
+crime_raw <- read_csv(url.data, na='',col_types = type)
+
+# Fix column names
+names(crime_raw)<-str_to_lower(names(crime_raw)) %>%
+  str_replace_all(" ","_") %>%
+  str_replace_all("__","_") %>%
+  str_replace_all("#","_num")
+```
+
+### Data Exploration and pre-processing
+Before we start playing with data, it is important to understand how the data are organized, what fields are present in the table, and how they are stored.  We can investigate the internal structure of this data easily since it’s stored as a tibble.
+
+```{r}
+# Print out the tibble
+crime_raw
+
+# Understanding the data fields
+str(crime_raw)
+
+# Summarize the data
+summary(crime_raw)
+```
+
+```{r}
+crime_raw %>%
+  group_by(case_num) %>%
+  mutate(count=n()) %>%
+  filter(count>1)
+```
+
+
+The data are stored at a crime incident global, that is, there is observation for each crime incident and the data table.  Each incident has a unique identifier associated with it which is stored in the `case_number` variable.  By definition then, `case_number` should have all unique values however we see that some instances are duplicated, i.e., there are two or mor rows which have the same case value. For example, there are two rows in the data that have a case value equal to "JC438604".
+
+```{r, error=TRUE}
+# Get row names for display
+getrow<-t(filter(crime_raw,case_num=='JD448026'))
+
+# Create tibble for example duplicate record
+JD448026<-as_tibble(t(filter(crime_raw,case_num=='JD448026')),.name_repair=NULL,validate=NULL)
+
+# add row names and reorganize the duplicate for display
+JD448026 %>% 
+  mutate(Variable=rownames(getrow)) %>%
+  rename(Row1=V1,Row2=V2,Row3=V3) %>%
+  select(Variable, Row1, Row2)
+```
+
+These duplicated rows need to be removed. Since the differences only exist in one variable and the difference is minor, these duplications are likely a recording error. We can exlude the duplicated `case_number`'s with the `distinct` command inside the of the `dplyr::filter` command function
+
+```{r}
+# Remove duplicates
+crime_no_dup<-filter(distinct(crime_raw,case_num,.keep_all=TRUE))
+
+# Check to make sure 
+crime_no_dup %>%
+  group_by(case_num) %>%
+  summarize(count=n()) %>%
+  filter(count>1)
+```
+
+The `date_of_occurrence` gives an approximate date and time stamp as to when the crime incident might have happened.  This variable was initially read in as a character, but I used the `col_datetime()` designation with the correct format to make `R` recognize that this is in fact a date.
+
+```{r}
+crime_no_dup %>% 
+  select(date_of_occurrence) %>% 
+  head()
+
+crime_no_dup %>% 
+  select(date_of_occurrence) %>% 
+  tail()
+```
+
+The timezone for `date_of_occurrence` should be *America/Chicago*, even though the timezone is stored in R as Coordinated Universal Time (UTC). Time zone is actually unnecessary since all of the crimes committed occured in the same time zone. As such, I'm going to leave the timezone as UTC for this analysis. Moreover, setting the time zone to *America/Chicago* coerces four `date_of_occurrence` to `NA` since March 1, 2020 02:00:00 doesn't exist (thank you daylight savings). As there were definitely crimes committed those records should remain in the data set. 
+
+R understands the data stored in the `date_of_occurrence` column is a date and time stamp. Processing the data a bit further we can separate the time stamps from the date part using the functions from the `lubridate` library.
+
+The frequency of crimes is probably not consistent throughout the day. There could be certain time intervals of the day where criminal activity is more prevalent compared to other intervals. To check this, we can bucket the timestamps into a few categories and then see the distribution the buckets. As an example we create four 6-hour time windows beginning at midnight to bucket the time stamps. The four time intervals we get are midnight to 6 AM, 6 AM to noon, noon to 6 PM, and 6 PM to midnight.
+
+For bucketing we first create variable bins using the four time intervals mentioned above. Once the bins are created the next step is to match each timestamp in the data to one of these time enter this can be done using the cut function.
+
+```{r}
+# Remove timestamp from datetime and place in separate column
+library(lubridate)
+crime_clean<-crime_no_dup %>%
+  mutate(time=hms::as.hms(hour(date_of_occurrence)*60+minute(date_of_occurrence)), # Remove timestamp from datetime and place in separate column
+         date=date(date_of_occurrence), # Separate date part from date time
+         time_group=cut(as.numeric(time),breaks=c(0,6*60,12*60,18*60,23*60+59),labels=c("00-06","06-12","12-18","18-00"),include.lowest = TRUE))
+
+crime_clean %>% select(case_num, date_of_occurrence, date, time, time_group)
+
+crime_clean %>% group_by(time_group) %>% summarize(count=n())
+```
+
+The distribution of crime incidents across the day suggests that crimes are more frequent during the latter half of the day.
+
+One of the core aspects of data mining is deriving increasigly more information from the limited data that we have. We will see a few examples of what we mean by this as we go along. Let's start with something simple and intuitive.
+
+We can use the date of incidence to determine which day of the week and which month of the year the crime occurred. It is possible that there is a pattern in the way crimes occur (or are committed) depending on the day of the week and month.
+
+```{r}
+crime_clean <- crime_clean %>%
+         mutate(
+           day=wday(date,label=TRUE,abbr=TRUE),
+           month=month(date,label=TRUE,abbr=TRUE)
+         )
+
+crime_clean %>% select(case_num, date_of_occurrence, day, month)
+```
+
+
+There are two fields in the data which provide the description of the crime incident. The first, primary description provides a broad category of the crime type and the second provides more detailed information about the first. We use the primary description to categorize different crime types.
+
+```{r}
+# Specific crime types
+(t<-crime_clean %>% 
+  group_by(primary_description) %>%
+  summarize(count=n()) %>%
+  arrange(desc(count)))
+```
+
+The data contains `r nrow(t)` crime types; not all of which are mutually exclusive. We can combine two or more similar categories into one to reduce this number and make the analysis a bit more manageable.
+
+```{r}
+# Some categories can be combined to reduce this number
+crime_clean<-crime_clean %>%
+  mutate(
+    crime=fct_recode(primary_description,
+                     "DAMAGE"="CRIMINAL DAMAGE",
+                     "DRUG"="NARCOTICS",
+                     "DRUG"="OTHER NARCOTIC VIOLATION",
+                     "FRAUD"="DECEPTIVE PRACTICE",
+                     "MVT"="MOTOR VEHICLE THEFT",
+                     "NONVIOLENT"="LIQUOR LAW VIOLATION",
+                     "NONVIOLENT"="CONCEALED CARRY LICENSE VIOLATION",
+                     "NONVIOLENT"="STALKING",
+                     "NONVIOLENT"="INTIMIDATION",
+                     "NONVIOLENT"="GAMBLING",
+                     "NONVIOLENT"="OBSCENITY",
+                     "NONVIOLENT"="PUBLIC INDECENCY",
+                     "NONVIOLENT"="INTERFERENCE WITH PUBLIC OFFICER",
+                     "NONVIOLENT"="PUBLIC PEACE VIOLATION",
+                     "NONVIOLENT"="NON-CRIMINAL",
+                     "OTHER"="OTHER OFFENSE",
+                     "SEX"="HUMAN TRAFFICKING",
+                     "SEX"="CRIMINAL SEXUAL ASSAULT",
+                     "SEX"="SEX OFFENSE",
+                     "SEX"="CRIM SEXUAL ASSAULT",
+                     "SEX"="PROSTITUTION",
+                     "TRESSPASS"="CRIMINAL TRESPASS",
+                     "VIOLENT"="KIDNAPPING",
+                     "VIOLENT"="WEAPONS VIOLATION",
+                     "VIOLENT"="OFFENSE INVOLVING CHILDREN"
+                     ),
+    crime_type=fct_recode(crime,
+                          "VIOLENT"="SEX",
+                          "VIOLENT"="ARSON",
+                          "VIOLENT"="ASSAULT",
+                          "VIOLENT"="HOMICIDE",
+                          "VIOLENT"="VIOLENT",
+                          "VIOLENT"="BATTERY",
+                          "NONVIOLENT"="BURGLARY",
+                          "NONVIOLENT"="DAMAGE",
+                          "NONVIOLENT"="DRUG",
+                          "NONVIOLENT"="FRAUD",
+                          "NONVIOLENT"="MVT",
+                          "NONVIOLENT"="NONVIOLENT",
+                          "NONVIOLENT"="ROBBERY",
+                          "NONVIOLENT"="THEFT",
+                          "NONVIOLENT"="TRESSPASS",
+                          "NONVIOLENT"="OTHER"
+                          ) # Further combination into violent and non-violent crime types
+  )
+crime_clean %>%
+  group_by(crime) %>%
+  summarize(count=n()) %>%
+  arrange(desc(count))
+
+crime_clean %>%
+  group_by(crime_type) %>%
+  summarize(count=n()) %>%
+  arrange(count)
+```                          
+
+With a couple of basic variables in place, we can start with a few visualizations to see how, when, and where are the crime incidents occuring.
+
+### Visualizations
+Visualizing data is a powerful way to derive high-level insights about the underlying patterns in the data. Visualizations provide helpful clues as to where we need to investigate further. To see a few examples, we start with some simple plots of variables we processed in the previous section using the powerful `ggplot2` library.
+
+```{r}
+# Frequency of crime
+library(scales)
+crime_clean %>% 
+  group_by(crime) %>%
+  summarise(count=n()) %>%
+  ggplot(aes(x = reorder(crime,count), y = count)) +
+  geom_bar(stat = "identity", fill = "#756bb1") +
+  labs(x ="Crimes", y = "Number of crimes", title = "Crimes in Chicago") + 
+  scale_y_continuous(label = comma) +
+  coord_flip()
+```
+
+Prevalence of different crimes seem to be an evenly distributed in Chicago with theft and battery being much more frequent. It would be interesting to look at how crimes are distributed with respect to time of day, day of week, and month.
+
+```{r}
+# Time of day
+crime_clean %>%
+  ggplot(aes(x = time_group)) +
+  geom_bar(fill = "#756bb1") +
+  labs(x = "Time of day", y= "Number of crimes", title = "Crimes by time of day")
+
+# Day of week
+crime_clean %>%
+  ggplot(aes(x = day)) +
+  geom_bar(fill = "#756bb1") +
+  labs(x = "Day of week", y = "Number of crimes", title = "Crimes by day of week")
+
+# Month
+crime_clean %>%
+  ggplot(aes(x = month)) +
+  geom_bar(fill = "#756bb1") +
+  labs(x = "Month", y = "Number of crimes", title = "Crimes by month")
+```
+
+There does seem to be a pattern in the occurrence of crime with respect to the dimension of time. The latter part of the day, Fridays, and summer months witness more crime incidents, on average, with respect to other corresponding time periods.
+
+These plots show the combined distribution of all crime with respect to different intervals of time. We can demonstrate the same plots with additional information by splitting out the different crime types. For example, we can see how different crimes vary by different times of the day. To get the number of different crimes by time of day, we need to aggregate the data at a crime – time group level. That is, four rows for each crime type – one for each time interval of the day. An easy way to aggregate data is to use the `summarize` function.
+
+```{r}
+library(viridis)
+library(scales)
+crime_clean %>%
+  group_by(crime,time_group) %>%
+  summarise(count=n()) %>%
+  ggplot(aes(x=crime, y=time_group)) +
+  geom_tile(aes(fill=count)) +
+  labs(x="Crime", y = "Time of day", title="Theft occurs most often between noon and 6pm") +
+  scale_fill_viridis_c("Number of Crimes",label=comma) +
+  coord_flip()
+```
+A quick look at the heat map shows that most of the theft incidents occur in the afternoon whereas drug related crimes are more prevalent in the evening.
+
+We can perform a similar analysis by day of week and month as well. 
+
+```{r}
+# Crimes by day of the week
+crime_clean %>%
+  group_by(crime,day) %>%
+  summarise(count=n()) %>%
+  ggplot(aes(x=crime, y=day)) +
+  geom_tile(aes(fill=count)) +
+  labs(x="Crime", y = "Day of week", title="Battery is more prevelant on Sundays") +
+  scale_fill_viridis_c("Number of Crimes",label=comma) +
+  coord_flip()
+
+
+# Crimes by month
+# A third way of aggregating data is using the summaryBy function from the doBy package
+crime_clean %>%
+  group_by(crime,month) %>%
+  summarise(count=n()) %>%
+  ggplot(aes(x=crime, y=month)) +
+  geom_tile(aes(fill=count)) +
+  labs(x="Crime", y = "Month of year", title="Summer is popular for crimes") +
+  scale_fill_viridis_c("Number of Crimes",label=comma) +
+  coord_flip()
+```
+
+Till now we have only looked at the temporal distribution of crimes. But there is also a spatial element attached to them. Crimes vary considerably with respect to geographies. Typically, within an area like a zip code, city, or county, there will be pockets or zones which observe higher criminal activity as compared to the others. These zones are labeled as crime hot-stops and are often the focus areas for effective predictive policing. We have the location of each crime incident in our data that can be used to look for these spatial patterns in the city of Chicago. For this purpose, we will utilize the shape files for Chicago Police Department’s beats by processing them in R using the `maptools` library. The shape files for CPD beats can be downloaded from <https://data.cityofchicago.org/Public-Safety/BoundariesPolice-Beats/kd6k-pxkv>.
+
+```{r}
+# Police beat shape files
+library(maptools)
+beat_shp<-readShapePoly('~/Intro_to_R/HW_4/data/PoliceBeat.shp')
+plot(beat_shp)
+```
+
+If we plot the shape file, we get the city of Chicago cut up into beats. We can plot our crime incidences by mapping them to the coordinates of the shape files. 
+
+To add more value to our analysis, we can also plot the locations of the police stations in Chicago and see if there is any relation between hot-spots of crime and proximity of police stations. Shape files for CPD police stations can be downloaded from <https://data.cityofchicago.org/Public-Safety/PoliceStations-Shapefiles/tc9m-x6u6>.
+
+```{r}
+station_shp <- rgdal::readOGR("~/Intro_to_R/HW_4/data/police_stations.shp") # A more modern way to read in shapefiles
+```
+
+Unfortunately, we don’t have exact locations of the police stations in a ready format. They are embedded in the shape files and need to be extracted out. We have written a function to do just that. It takes a shape file as an input and returns the location (lat and long) of each police station in Chicago as the input.
+
+```{r}
+# Get police station information
+getPoliceData <- function(shp_file){
+	PoliceData <- tibble()
+	NumOfStations = nrow(shp_file@data)
+		for(i in 1:NumOfStations){
+			PoliceData[i, 1] <- shp_file@data$DESCRIPTIO[i]
+			PoliceData[i, 2] <- shp_file@polygons[[i]]@labpt[1]
+			PoliceData[i, 3] <- shp_file@polygons[[i]]@labpt[2]
+		}
+	names(PoliceData) <- c("description", "lat", "long")
+	return(PoliceData)
+}
+police_data <- getPoliceData(station_shp)
+```
+
+Before we can plot the data on the map, we need to process it a bit further and get crime counts for each location. ddply() from the plyr library is a convenient function for this. ddply() takes a portion of a data frame, applies a function to that portion, and returns the result back in the form of a data frame. It works similar to the aggregate() function in the base package but is more flexible, versatile, and powerful.
+
+```{r}
+# Aggregate data for plotting it on maps
+(crime_agg <- group_by(crime_clean, crime, arrest, beat, date, x_coordinate,y_coordinate, time_group, day, month) %>%
+  summarise(count = n())) %>%
+  arrange(desc(count))
+```
+
+We are going to utilize ggplot2’s extensive plotting capabilities for this exercise as well. To plot the shape file using `ggplot()`, we need to convert the data in the shape file into a data frame using the `fortify.SpatialPolygons()` function. The function `fortify.SpatialPolygons()` has been written by [Hadley Wickham](http://hadley.nz/) and is available on his GitHub page <https://github.com/hadley/ggplot2/blob/master/R/fortify-spatial.r>.
+
+```{r}
+library(bigreadr)
+#source("https://raw.githubusercontent.com/tidyverse/ggplot2/master/R/fortify-spatial.r")
+fortify.SpatialPolygons <- function(model, data, ...) {
+  rbind_df(lapply(model@polygons, fortify)) #had to fix line in Hadley's source code. rbind_dfs was replaced with rbind_df
+}
+beat_shp_df<-fortify.SpatialPolygons(beat_shp)
+(crime_plot <- ggplot(beat_shp_df, aes(x=long, y=lat)) +
+  geom_path(aes(group = group),col="#969696") + 
+  theme_bw() +
+  geom_point(data= police_data, aes(x= lat, y= long),col="#de2d26",shape=15, size=2))
+```
+
+To see how the crimes in Chicago are spread out spatially on a given day, we take the first date in our data set and the subset data for observations relating to this date only. In addition, to plot the crime incidents on the map, we convert our coordinates from factor to numeric.
+
+```{r,message=FALSE,warning=FALSE}
+# the cool ggplot way
+# crimes for one day
+today <- crime_agg %>%
+  ungroup() %>%
+  select(date) %>%
+	filter(row_number()==1)
+
+(crime_plot <- crime_plot + 
+	geom_point(data=filter(crime_agg, as.character(date) == today), 
+		aes(x=x_coordinate, y= y_coordinate, color=crime),alpha=0.15) +
+  theme_bw() +
+  ggtitle(str_c("Crime in Chicago on", 
+                wday(today$date,label=TRUE,abbr=FALSE), ",",
+                month(today$date, label=TRUE, abbr=FALSE), 
+                day(today$date), year(today$date))) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(), 
+        axis.title.x = element_blank(), 
+        axis.title.y = element_blank(), 
+        axis.text.x = element_blank(), 
+        axis.text.y = element_blank(), 
+        axis.ticks = element_blank()))
+```
+
+The red squares on the plot are the police stations, whereas the other dots represent different crimes. A quick look at the plot indicates that quite a few police stations are located in and around high-crime areas except for the ones in the south-east corner where the incidents of crime appear much lesser. This plot, however, just shows the crime instances for one particular day. A better way to understand the pattern would be look at these crimes for a larger time period, for example, a month or a year. However, plotting the data for the entire year on one plot would not be visually conclusive since there will be too many data points over-crowding the limited space. 
+
+An effective alternative is to plot the crimes for each day and see how the pattern is changing. We, however, don’t want to run the code above for 365 days and then look at 365 different files. This is where R’s powerful plotting capabilities come out in full glory. We can use the `animation` library to create a rolling window plot that updates for each date, plots crimes for the entire year, and provides only one file as the output. We plot the crimes by taking the subset of the data for each date in the data set, plotting it, saving it, and repeating the process again. We then use the `saveMovie()` function in the animation package to convert the temporarily saved png files into a gif image. A visually more appealing plot along these lines has been made by Drew Conway and can be found on his [blog](http://drewconway.com/zia/2013/3/26/a-year-of-chicagos-crime-in-30-seconds).
+
+<iframe title="vimeo-player" src="https://player.vimeo.com/video/25424786" width="640" height="616" frameborder="0" allowfullscreen></iframe>
+
+We have seen some interesting visualizations that helped us gauge the data better and provide clues to potential predictor variables for the model. Visualizations, like these and many others, are a great resource for data explorers as they guide us towards information hidden deep down somewhere among these large piles of data.
+
+### Modeling
+Before we get to our model, we need to process the data a bit more. Specifically, we need to determine at what level of data are we going to build the model and what kind of independent variables can we derive from the existing data set. 
+
+The data we have are at a crime incident level, that is, for each recorded each crime incident in the city of Chicago that occurred in the past 12 months, we have the location, date, type, beat, and ward. The location is available at a very granular level with the exact geographical coordinates present alongside the larger territorial identity of police beats. Such information is vital, but it needs to be understood that not all information can be directly transformed into an implementable solution. We cannot predict exactly when and where the next crime is going to happen. Data scientists don’t make prophecies. They derive actionable insights in the form of statistical aggregates. Therefore, understanding the nature of the problem is critical for designing a workable solution within a given set of constraints.
+
+Keeping the ultimate goal of predictive policing in mind, our modeling engine would need to be constructed at a reasonably sized predefined geographical area for reasonably long predefined time interval. For example, the geographical area can be a block, or a couple of blocks taken together, a zip code, a beat etc. Similarly, the time interval can be an hour or a couple hours or a day.
+
+For our purpose, we will build a multivariate regression model with a negative binomial distribution for errors at a beat-day level for all the crimes taken together. There are many approaches that can be taken to develop crime prediction models. We chose a negative binomial model because of its simplicity, general acceptance and understanding, and ease of implementation. It is debatable whether building the model in this fashion is the right approach or not. We agree to the fact that in terms of accuracy, a better solution would be to deal with different crime types separately and generate predictions for smaller time periods. However, this is just an indicative exercise which has been broken down for understanding and at times, brevity. Following these lines, we try to explain how a solution can be designed through a well suited approach without worrying too much about the exact details and metrics.
+
+To create the modeling data set, we first create our base data set which has all possible unique combinations of beats and dates. The number of rows for the base data will be the product of the total number of unique beats and total number of unique dates.
+
+```{r}
+# Create a base data set that contains unique combination of all beats and dates
+# The number of rows for the base data will be the product of 
+crime_agg %>%
+  ungroup() %>%
+  summarize(count_beats=n_distinct(beat),
+            count_date=n_distinct(date))
+
+# Unqiue beats from crime data
+(beats <- crime_agg %>%
+    ungroup() %>%
+    distinct(beat) %>%
+    arrange(beat))
+
+# Unqiue dates from crime data
+(dates <- crime_agg %>%
+    ungroup() %>%
+    distinct(date) %>%
+    arrange(date))
+```
+
+The function `expand_grid()` will help create the desired data frame with the unique combination
+of `beat` and `date`. For convenience, we can sort/order the data frame by beats
+
+```{r}
+# Create base data
+(temp <- expand_grid(beats, dates) %>%
+   arrange(beat)) # order base data
+```
+
+The total number of crimes in a beat on a given day can be found by aggregating the data by beats and dates.
+
+```{r}
+# Aggregate crime.agg data to get one row for beat-date combination
+(model_data <- crime_agg %>%
+  ungroup() %>%
+  group_by(beat,date) %>%
+  summarize(count=sum(count,na.rm=TRUE),
+            arrest=sum(as.numeric(arrest)-1,na.rm=TRUE)))
+```            
+
+We then overlap the aggregated crimes data with the temp data set we created to get our final
+modeling data set
+
+```{r}
+# Overlap base data and crime_agg data
+# For beat-date combinations missing in incident data, we will get NAs
+(model_data <- temp %>%
+   left_join(model_data, keep=F))
+```
+
+Our modeling data set has all the crime incidents that were recorded in the past 12 months. However, during this period, there were beats in which no crime occurred (or was not recorded) on certain days. For these rows, we see NAs in the count and arrest fields. We can replace the NAs with zero to indicate that there were no crimes, and therefore no arrests, in these beats on these days.
+
+```{r}
+(model_data <- model_data %>%
+  mutate(arrest=replace_na(arrest,0),
+         count=replace_na(count,0)))
+```
+
+We saw in the visualization exercise that there was variation in the crime incidents with respect to days of the week and month, suggesting that they can be used as predictor variables in the model. These variables can be created using the `wday()` and `month()` functions, respectively
+
+```{r, error=FALSE}
+# Get day of the week from date to incorporate intra-week trends
+(model_data <- model_data %>%
+  mutate(day=wday(date, abbr = TRUE, label=TRUE), # Get day of the week from date to incorporate intra-week trends
+         month=month(date, abbr = TRUE, label=TRUE),
+         day=as_factor(day),
+         month=as_factor(month))) # Get month from date to incorporate trends over a month
+```
+
+A potential important indicator of criminal activity in a particular area could be the history of criminal activities in the past. We can calculate the crime history of each beat for different time periods. To calculate the crime histories, we will use the group averages function `roll_sum` from the [RcppRoll](https://www.rdocumentation.org/packages/RcppRoll/versions/0.3.0/topics/RcppRoll) library. The `n` arguement will help us look back in time for any number of days by supplying only one argument.
+
+To calculate the number of crimes in the past seven days for each beat, we pass our data into `mutate` to create a past_crime1 variable, ensuring that our data is arranged by `beat` and `date` and grouping it by `date`. The `roll_sum` function takes the sum of the number of rows going back equal to the arguement supplied in `n`.
+
+```{r}
+library(RcppRoll)
+# Get crime history for each beat
+(model_data <- model_data %>%
+   ungroup() %>%
+   arrange(beat,date) %>%
+   group_by(beat) %>%
+   mutate(
+    past_crime1=lag(count), # Yesterday
+    past_crime7=roll_sum(count, n = 7, align = 'right', fill=NA))) # Past 7 days
+```
+
+We can calculate the crimes for the past 30 days as well.
+
+```{r}
+(model_data <- model_data %>%
+   mutate(past_crime30=roll_sum(count, n = 30, align = 'right', fill=NA)))
+```
+
+If we look at the data, we can see that the past crime information will not be available for certain dates. For example, if the first observation in our data is from May 29, 2019. This implies that the first observation for the `past_crime30` variable can only be calculated from June 21, 2011 onwards. Since we have `r dplyr::n_distinct(model_data$beat)` beats in our data, we will have missing values for `r sum(is.na(model_data$past_crime30))` rows, which is about `r 100*round(sum(is.na(model_data$past_crime30))/nrow(model_data))` % of our total observations. Simply removing these rows can lead to loss of valuable information. To circumvent this barrier, we need to impute for these missing observations with logical estimates from the data. One way to approach this is by taking the mean for each of these variables and replace the missing cells with this value.
+
+```{r}
+# Replace missing values in each column
+(model_data <- model_data %>% 
+   mutate(
+         past_crime1 = if_else(is.na(past_crime1),mean(past_crime1,na.rm = TRUE),past_crime1),
+         past_crime7 = if_else(is.na(past_crime7),mean(past_crime7,na.rm = TRUE),past_crime7),
+         past_crime30 = if_else(is.na(past_crime30), mean(past_crime30,na.rm = TRUE),past_crime30))
+ )
+```
+
+We are not done with past crimes as yet. There is more valuable information that we can extract from these and, typically, such will be the case in most data mining exercises we do. With a few base variables, we can tweak, twist, and turn them to look at the response from different perspectives.
+
+We have information on the number of arrests made in each beat on each day. We calculate similar past variables for arrests and see the effects of police actions in the past on crimes in the future. For example, we can calculate the number of arrests in the past 30 days for each beat.
+
+```{r}
+# Arrests history
+(model_data <- model_data %>%
+   mutate(
+     past_arrest30=roll_sum(arrest, n = 30, align = 'right', fill=NA), # Past 30 days
+     past_arrest30 = if_else(is.na(past_arrest30), mean(past_arrest30,na.rm = TRUE),past_arrest30) # Replace missing values in each column
+    ))
+```
+
+Simply using the past arrests variable will not bring out the effect we are looking for since it will be highly correlated with the past crimes variable (the correlation between `past_crime30` and `past_arrest30` is `r round(cor(model_data$past_crime30,model_data$past_arrest30))`).
+
+To bring out the real effect of policing, we can normalize past arrests by past crimes and see if more arrests per crime in the past have deterred criminals from committing crimes in the future
+
+```{r}
+# effect of policing
+(model_data <- model_data %>%
+  mutate(policing=if_else(past_crime30 == 0, 0, past_arrest30/past_crime30)))
+```
+
+Another useful extension of past crimes variables can be the interaction between crimes in the past 7 days to crime in the past 30 days to see if crime has been increasing or decreasing in the recent past and what effect does this have on future crimes.
+
+```{r}
+# effect of crime trend
+(model_data <- model_data %>%
+   mutate(crime_trend = if_else(past_crime30 == 0, 0, past_crime7/past_crime30)))
+```
+
+Our visualization exercise showed that there is considerable variation in crime incidents with respect to the time of the year. But we have only 1 year of data for both building the model and validating it. To use the month variable effectively, we can combine the similar months to form a new variable that reflects the changes in crime incidents with seasons.
+
+```{r}
+# Season variable
+(model_data <- model_data %>%
+   mutate(season=fct_recode(month,
+                     "spring"="Mar",
+                     "spring"="Apr",
+                     "spring"="May",
+                     "summer"="Jun",
+                     "summer"="Jul",
+                     "summer"="Aug",
+                     "fall"="Sep",
+                     "fall"="Oct",
+                     "fall"="Nov",
+                     "winter"="Dec",
+                     "winter"="Jan",
+                     "winter"="Feb"
+                     ),
+          season=as_factor(season)
+          )
+  )
+```
+
+We have created a number of predictor variables, including interactions. The motivation behind deriving these was to get a set of variables that explains a good amount of variation in the dependent variable. One possible way to check this is the correlation between the dependent variable and the independent variables. The `corrplot` library has a convenient function that will allow us to do just that.
+
+```{r}
+# summary of modeling data set
+model_data %>%
+  ungroup() %>%
+  dplyr::select(count, past_crime1, past_crime7, past_crime30, policing, crime_trend, day, season)
+
+# calculate correlation matrix
+library(corrplot)
+M <- model_data %>% 
+  ungroup() %>%
+  dplyr::select(count, past_crime1, past_crime7, past_crime30, policing, crime_trend) %>%
+  cor()
+
+# correlation plot
+corrplot.mixed(M, order = "hclust", number.cex = 0.9)
+```
+
+Though data mining is a creative process, it does have some rules. One of the most stringent ones being that the performance of any predictive model is to be tested on a separate out-of-sample dataset. Analysts and scientists who are ignorant of this are bound to face the wrath of over-fitting leading to poor results when the model is deployed.
+
+In our case, to measure the performance of our model, we will use an out-of-time validation sample. We will divide our data into two portions—a 90% development sample where we can train or develop our model and a 10% validation sample where we can test the performance of our model. We can do this with the `createDataPartition()` function in the `caret` library then splitting them into train and test using proportional numbers for observations required in each.
+
+```{r}
+library(modelr)
+# Keep 10% of the data for out of time validaton
+(model_dat <- model_data %>% 
+  ungroup() %>% 
+  mutate(season_summer=if_else(season=='summer',1,0),
+         season_winter=if_else(season=='winter',1,0),
+         season_spring=if_else(season=='spring',1,0),
+         season_fall=if_else(season=='fall',1,0)) %>%
+  arrange(date))
+
+
+preds_x <- model_matrix(model_dat,count ~ past_crime1 + past_crime7 + past_crime30 + policing + crime_trend + day + season_spring + season_summer + season_winter + season_fall + I(past_crime30^2) - 1)
+
+ids_mod<-model_dat %>%
+  dplyr::select(beat,date,count)
+
+(modeling_data<-bind_cols(ids_mod,preds_x) %>% 
+    arrange(date) %>%
+    rename(past_crime_sq=`I(past_crime30^2)`)
+  )
+
+
+inTrain<-c(1:floor(nrow(modeling_data)*0.90))
+(training<-modeling_data[inTrain,])
+
+(test<-modeling_data[-inTrain,])
+```
+
+The dependent variable here, `count`, is a count variable. It is a discrete variable that counts the number of crimes instances in a particular beat on a given day. Typically, for modeling counts, a poisson regression model is a preferred choice that seems to fit the data well. However, the poisson regression model comes with the strong assumption that the mean of the dependent variable is equal to its variance. In our case, this assumption does not hold.
+
+```{r}
+mean(training$count)
+
+var(training$count)
+```
+
+The variance is much greater than the mean indicating that the distribution is overdispersed. A suitable way to model for such overdispersion is using the negative binomial distribution. We will use the `glm.nb()` method with the `train` function from the `caret` package to build the model.
+
+As a basic model, we will include all linear variables and interactive effects we created in the previous section.
+
+```{r,warning=FALSE,message=FALSE}
+library(caret);library(MASS);
+# define training control
+train_control <- trainControl(method="repeatedcv", number=10)
+
+# Negative binomial regression model
+crime_nb <- train(count ~ .-beat-date-season_summer-dayFri-past_crime_sq, data = training, trControl=train_control, method = 'glm.nb', tuneLength = 5)
+summary(crime_nb$finalModel) 
+```
+
+
+Most of the variables are significant at the 0.1% level except crimes in the past 7 days given by past.crime.7 and the winter season. This shows that the visualization exercise was fruitful and our insights based on those did represent the structure present in the data. The significance of variables, however, is not a deciding factor for the model being good or bad. For that, we need to go a step further.
+
+
+### Model Evaluation
+
+One widely used industry practice to decide whether a model is good or bad is to check its performance on an out-of-sample or out-of-time data set. Before starting the modeling exercise, we kept a portion of data for this purpose. We can check the performance on the outof-sample data set by scoring it using the `predict()` function and comparing it to the actual values by using the root mean squared error (RMSE).
+
+```{r}
+# predict on test data
+pred_nb <- predict(crime_nb$finalModel, test)
+# rmse
+sqrt(mean((test$count - pred_nb)^2))
+```
+
+The RMSE is a popular industry metric that gives us a value of how far we are on average from the actual values. We establish a benchmark with the first iteration of the model. This benchmark then initiates an iterative process of tweaking the model constituents, adding or deleting variables, transforming them till we get some improvement. As an example, consider the scenario where we believe that crimes in the future increase as crimes in the past increase, but at a decreasing rate, that is, the relationship between then is concave. In such a situation including another variable which is a higher-order term for `past_crime30` might help reduce the RMSE.
+
+```{r,message=FALSE,warning=FALSE}
+# Negative binomial regression model with past_crime_sq
+crime_nb2 <- train(count ~ .-beat-date-season_summer-dayFri, data = training, trControl=train_control, method = 'glm.nb')
+summary(crime_nb2$finalModel)
+
+# predict on test data
+pred_nb2 <- predict(crime_nb2$finalModel, test)
+# rmse
+sqrt(mean((test$count - pred_nb2)^2))
+```
+
+Inclusion of an additional important variable increased the RMSE from `r sqrt(mean((test$count - pred_nb)^2))` to `r sqrt(mean((test$count - pred_nb2)^2))` - an indication that we are headed in the wrong direction. 
+
+Typically, with limited amount of data and time one can only improve so much on a given model. The key is then to decide the optimal point where the trade-off between accuracy and effort is minimized.
+
+RMSE is just one of the many metrics that can be employed to determine the predictive power of a model. Another common method used is the actual versus predicted plot that gives a visual representation of how far away our predictions are from the actual values.
+
+Directly comparing the actual and predicted values may not yield any insights considering there are about 10,000 data points within a small range. To make the comparison visually convenient and conclusive, we can bin the predictions and the actuals into groups and compare the average values for corresponding groups. For example, we can create 10 groups of the predicted values and take the average of the predicted and actual values in each group. The idea is that if the predictions were reasonably accurate, we would get reasonably overlapping lines. This gives us a comprehensive and condensed view of the differences between our predictions
+and the actual crimes.
+
+For the plot, we first bring the actual and the predicted values into one data frame and thenuse the cut() function to create 10 groups of the predicted values and calculate the average values of the predicted and actual crimes by applying the mean() function to each group.
+
+```{r}
+# actual vs predicted graph
+(validate <- test %>%
+  add_predictions(crime_nb) %>%
+   mutate(pred=round(pred))) %>%
+  ggplot(aes(pred,count)) +
+  geom_hex() + 
+  geom_abline(color="#2ca25f")
+```
+
+### Try some other models
+Let's now try 6 different models. Some models require tuning parameters, so we tell `caret` to try 5 different combinations of tuning parameters for each model that requires tuning parameters. For linear regression models, there are no tuning parameters.
+
+```{r}
+#glmnet model
+crime_glmnet <- train(count ~ .-beat-date-season_summer-dayFri-past_crime_sq, data = training, trControl=train_control, method = 'glmnet',family='gaussian',tuneLength = 5)
+
+#poisson
+crime_pois <- train(count ~ .-beat-date-season_summer-dayFri-past_crime_sq, data = training, trControl=train_control, method = 'glmnet',family='poisson',tuneLength = 5)
+
+#earth
+crime_earth <- train(count ~ .-beat-date-season_summer-dayFri-past_crime_sq, data = training, trControl=train_control, method = 'earth',tuneLength = 5)
+
+#earth poisson
+crime_earth_pois <- train(count ~ .-beat-date-season_summer-dayFri-past_crime_sq, data = training, trControl=train_control, method = 'earth', glm = list(family=poisson), tuneLength = 5)
+
+#gam
+crime_gam <- train(count ~ .-beat-date-season_summer-dayFri-past_crime_sq, data = training, trControl=train_control, method = 'gam', tuneLength = 5)
+
+#rpart
+crime_tree <- train(count ~ .-beat-date-season_summer-dayFri-past_crime_sq, data = training, trControl=train_control, method = 'rpart', tuneLength = 5)
+```
+
+
+And we select the best model based on cross-validation $R^2$.
+
+```{r,warning=FALSE,message=FALSE}
+resamps <- resamples(list(glmnet = crime_glmnet,
+                          poisson =crime_pois,
+                          neg_bin = crime_nb,
+                          earth=crime_earth,
+                          earth.pois=crime_earth_pois,
+                          gam=crime_gam,
+                          rpart=crime_tree))
+ss <- summary(resamps)
+ss[[3]]$Rsquared
+
+library(lattice)
+
+trellis.par.set(caretTheme())
+dotplot(resamps, metric = "Rsquared")
+```
+
+Looks like the earth model fits the data the best of these seven models. 
+
+### Discussions and Improvements
+
+It has been a lengthy and informative exercise till now. We learnt how to—pull data directly from web, handle, clean, and process crime data, utilize geo-coded information through shape files, retrieve hidden information through visualizations, create new variables from limited data, build a predictive engine for crime, and test how good it is. There are still some issues that we need to address related to deployment, limitation, and improvements.
+
+The model we built predicts the expected number of crimes in each beat in the city of Chicago for each day. The purpose behind building the model was to build a resource that would help law enforcement agencies deploy their resources proactively and efficiently. In purview of this, one way the model could be deployed is by using color-coded maps identifying the crime hot-spots in the city for a particular day. The crime hot-spots can then be administered effectively by using patrolling teams.
+
+These strategies, however, do have their limitations. First, the 24-h prediction window might appear too large and static for effective patrolling. For example, we saw that crimes follow a pattern during a particular day. Their frequency tends to be much higher during the latter half of the day. A spatial dimension can be added to this pattern, that is, there might be certain beats which expect more crimes during a particular time interval within a day. A possible workaround could be to build the model for smaller time intervals and allow the crime hot-spots to change during the day. Second, our crime model predicts the expected number of crimes without being able to differentiate among them and by treating them equally. In reality, certain crimes types have totally different characteristics from the others. For example, crimes like murder, aggravated assault, and rape, along with other violent crimes, may need special attention from modelers and the police alike. These nuances could be better addressed if there were separate models for violent crimes, nonviolent and organized crimes. Third, zoning down to one beat as a crime hotspot ignores the impact of crimes in neighboring areas. Since crimes have a spatial distribution attached to them, there might be high correlation between criminal activities in adjoining beats. A simple way to control for this is to include crime history of the adjoining beats in the given model and check their impact on the predictions.
+
+The limitations discussed earlier indicate that there is a lot of scope for further research and work in the area of crime prediction. And the scope is not limited to the data itself. There are different predictive techniques that can be employed to see if we can get incremental lift from these. The suggestions, however, do not undermine the work presented in the chapter which is expected to provide the reader with a detailed understanding of processes involved in mining crime data with R.

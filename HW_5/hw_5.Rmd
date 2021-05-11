@@ -1,0 +1,117 @@
+---
+title: "HW_5"
+author: "Austin Pesina"
+date: "5/8/2021"
+output:
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(leaflet)
+library(tidyverse)
+library(sp)
+library(sf)
+library(rgdal)
+```
+
+## San Antonio Voter Turnout By District
+
+
+```{r}
+districts <- readOGR("https://opendata-cosagis.opendata.arcgis.com/datasets/513cfef832df4b7489a2df499972401f_0.geojson?outSR=%7B%22latestWkid%22%3A3857%2C%22wkid%22%3A102100%7D")
+
+districts_sf <- st_as_sf(districts)
+
+dist_sort <- districts_sf %>%
+  mutate(OBJECTID = District,
+         SHAPE_Area = District) %>%
+  arrange(District, SHAPE_Area)
+
+
+
+map <- leaflet(dist_sort) %>% 
+  addTiles()
+
+fact_pal <- colorFactor(
+  c("#7f3b08", "#b35806", "#e08214", "#fdb863", "#fee0b6",
+    "#d8daeb", "#b2abd2", "#8073ac", "#542788", "#2d004b"),
+  domain = dist_sort$SHAPE_Area
+)
+
+dist_col <- colorFactor(
+  c("#7f3b08", "#b35806", "#e08214", "#fdb863", "#fee0b6",
+    "#d8daeb", "#b2abd2", "#8073ac", "#542788", "#2d004b"), 
+  domain = dist_sort$District)
+
+icon <- makeIcon(
+  iconUrl = "https://webapp1.sanantonio.gov/CCProjectFunds/img/City_Seal.png",
+  iconWidth = 31*215/230, iconHeight = 31, 
+  iconAnchorX = 31*215/230/2, iconAnchorY = 16 
+)
+
+location <- data.frame(
+  lat = c(29.486200724045652, 29.48479472904636, 29.350099136775775, 29.359258502853454, 29.383821770309325, 
+          29.477790319634487, 29.489051649815117, 29.569814790542864, 29.59606161923266, 29.531129209576832), 
+  lng = c(-98.53458065297524, -98.40797470406713, -98.4379100445501, -98.5962711138662, -98.52555732464774, 
+          -98.64901115634329, -98.56900788435527, -98.6431411425677, -98.47194720722952, -98.43403535915665)          
+) 
+
+office_info <- c("<a href='https://www.sanantonio.gov/council/d1.aspx'>Robert Trevino - District 1</a><br>
+                    <br>Population: 112,446
+                    <br>Votes for 2021 City Council: 12,569
+                    <br>Voter turnout: 11.18%",
+                 "<a href='https://www.sanantonio.gov/council/d2.aspx'>Jada Andrews-Sullivan - District 2</a><br>
+                    <br>Population: 123,574
+                    <br>Votes for 2021 City Council: 8,571
+                    <br>Voter turnout: 6.94%",
+                "<a href='https://www.sanantonio.gov/council/d3.aspx'>Rebecca Viagran - District 3</a><br>
+                    <br>Population: 118,855
+                    <br>Votes for 2021 City Council: 10,258
+                    <br>Voter turnout: 8.63%",
+                 "<a href='https://www.sanantonio.gov/council/d4.aspx'>Dr. Adriana Rocha Garcia - District 4</a><br>
+                    <br>Population: 123,163
+                    <br>Votes for 2021 City Council: 6,762
+                    <br>Voter turnout: 5.5%",
+                 "<a href='https://www.sanantonio.gov/council/d5.aspx'>Shirley Gonzales - District 5</a><br>
+                    <b>Population: 106,608
+                    <br>Votes for 2021 City Council: 6,764
+                    <br>Voter turnout: 6.34%",
+                 "<a href='https://www.sanantonio.gov/council/d6.aspx'>Melissa Cabello Havrda - District 6</a><br>
+                    <b>Population: 152,533
+                    <br>Votes for 2021 City Council: 12,425
+                    <br>Voter turnout: 8.15%",
+                 "<a href='https://www.sanantonio.gov/council/d7.aspx'>Ana Sandoval - District 7</a><br>
+                    <b>Population: 137,533
+                    <br>Votes for 2021 City Council: 15,872
+                    <br>Voter turnout: 11.54%",
+                 "<a href='https://www.sanantonio.gov/council/d8.aspx'>Manny Pelaez - District 8</a><br>
+                    <b>Population: 159,568
+                    <br>Votes for 2021 City Council: 17,504
+                    <br>Voter turnout: 10.97%",
+                 "<a href='https://www.sanantonio.gov/council/d9.aspx'>John Courage - District 9</a><br>
+                    <b>Population: 159,214
+                    <br>Votes for 2021 City Council: 25,148
+                    <br>Voter turnout: 15.8%",
+                 "<a href='https://www.sanantonio.gov/council/d10.aspx'>Clayton Perry - District 10</a><br>
+                    <b>Population: 133,045
+                    <br>Votes for 2021 City Council: 19,674
+                    <br>Voter turnout: 14.79%")
+
+map %>%
+  addPolygons(stroke = F, smoothFactor = 0.2, fillOpacity = 1,
+               color = ~fact_pal(dist_sort$SHAPE_Area)
+              ) %>%
+  addLegend("bottomright", pal = dist_col, values = ~District,
+            title = "San Antonio City Council Districts",
+            opacity = 1) %>%
+  addMarkers(lat = c(29.486200724045652, 29.48479472904636, 29.350099136775775, 29.359258502853454, 29.383821770309325, 
+                     29.477790319634487, 29.489051649815117, 29.569814790542864, 29.59606161923266, 29.531129209576832), 
+             lng = c(-98.53458065297524, -98.40797470406713, -98.4379100445501, -98.5962711138662, -98.52555732464774, 
+                     -98.64901115634329, -98.56900788435527, -98.6431411425677, -98.47194720722952, -98.43403535915665),
+             icon = icon, popup = office_info)
+```
+
+Population figures taken from 2010 Census results posted by the San Antonio Department of Planning & Community Development in [March 2012](https://www.sanantonio.gov/portals/0/Files/planning/Census2000To2010DemographicChangeSummaryReport.pdf).  
+Voter turnout taken from unofficial Bexar County [results](https://home.bexar.org/el45a.html) published May 1, 2021.
